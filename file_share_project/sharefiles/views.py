@@ -1,44 +1,61 @@
-from django.core.files.storage import default_storage
 from rest_framework import viewsets, status
 from rest_framework.response import Response
-from rest_framework.decorators import api_view
+from rest_framework.decorators import action
 from django.shortcuts import get_object_or_404
-from django.utils import timezone
-from datetime import timedelta
-from django.shortcuts import render
+from django.http import HttpResponseRedirect
 from .serializers import SharedFileSerializer
-from django.http import HttpResponseRedirect, JsonResponse
 from .models import SharedFile
+from .services import SharedFileService
 
 class SharedFileViewSet(viewsets.ModelViewSet):
     queryset = SharedFile.objects.all()
-    serializer_class = SharedFileSerializer  # ✅ fixed here
+    serializer_class = SharedFileSerializer
+
+    def perform_create(self, serializer):
+        user = self.request.user if self.request.user.is_authenticated else None
+        serializer.save(user=user)
 
     def create(self, request, *args, **kwargs):
-        """handle uploading a file.users send the file,
-        optionally set public status and expiry days."""
+        """handle uploading a file with optional public status and expiry days"""
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        shared_file = serializer.save()
 
+        user = request.user if request.user.is_authenticated else None
+        file_obj = request.data.get('file')
+        is_public = request.data.get('is_public', False)
         days = request.data.get('days', 3)
+
         try:
-            shared_file.set_expiry_days(int(days))
+            days = int(days)
         except ValueError:
-            shared_file.set_expiry_date(3)
+            days = 3
+
+        shared_file = SharedFileService.create_shared_file(
+            user=user,
+            file_obj=file_obj,
+            is_public=is_public,
+            days=days
+        )
+
         return Response(self.get_serializer(shared_file).data, status=status.HTTP_201_CREATED)
 
+    @action(detail=True, methods=['get'], url_path='serve')
+    def serve_by_token(self, request, pk=None):
+        """serve a file by its token"""
+        token = pk
+        file_obj, error = SharedFileService.get_shared_file_by_token(token)
 
-@api_view(['GET'])
-def serve_by_token(request, token):
-    """access file by its token"""
-    file_obj = get_object_or_404(SharedFile, token=token)
-    if file_obj.is_expired():
-        return Response({'detail': 'This link has expired.'}, status=status.HTTP_410_GONE)
-    if not file_obj.is_public:
-        return Response({'detail': 'This file is private.'}, status=403)
-    return HttpResponseRedirect(file_obj.file.url)
+        if error == "expired":
+            return Response({'detail': 'This link has expired.'}, status=status.HTTP_410_GONE)
+        if not file_obj.is_public:
+            return Response({'detail': 'This file is private.'}, status=status.HTTP_403_FORBIDDEN)
 
-"""uploading the html template"""
-def upload_page(request):
-    return render(request, 'upload.html')
+
+        return Response({
+            'id': file_obj.id,
+            'token': str(file_obj.token),
+            'file_url': file_obj.file.url,
+            'is_public': file_obj.is_public,
+            'created_at': file_obj.created_at,
+            'expires_at': file_obj.expires_at
+        })
