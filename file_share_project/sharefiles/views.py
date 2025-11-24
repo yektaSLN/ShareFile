@@ -6,10 +6,25 @@ from django.http import HttpResponseRedirect
 from .serializers import SharedFileSerializer
 from .models import SharedFile
 from .services import SharedFileService
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import filters
+from rest_framework.parsers import MultiPartParser, FormParser
 
 class SharedFileViewSet(viewsets.ModelViewSet):
+    parser_classes = [MultiPartParser, FormParser]
     queryset = SharedFile.objects.all()
     serializer_class = SharedFileSerializer
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter, filters.SearchFilter]
+
+    #fields to filter by
+    filterset_fields = ['is_public', 'user', 'created_at', 'expires_at']
+
+    #serach field
+    search_fields = ['token', 'user__username']
+
+    #ordering(optional)
+    ordering_fields = ['created_at', 'expires_at']
+    ordering = ['-created_at']
 
     def perform_create(self, serializer):
         user = self.request.user if self.request.user.is_authenticated else None
